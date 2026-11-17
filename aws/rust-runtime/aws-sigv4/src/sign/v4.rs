@@ -11,24 +11,50 @@ use crate::{
 use aws_credential_types::Credentials;
 use aws_smithy_runtime_api::{client::identity::Identity, http::Headers};
 use bytes::Bytes;
-use hmac::{digest::FixedOutput, Hmac, KeyInit, Mac};
-use sha2::{Digest, Sha256};
 use std::time::SystemTime;
+
+/// SHA-256 and HMAC-SHA256 from AWS-LC, selected by the `aws-lc-rs` or `aws-lc-rs-fips` feature.
+#[cfg(any(feature = "aws-lc-rs", feature = "aws-lc-rs-fips"))]
+mod hash {
+    use aws_lc_rs::{digest, hmac};
+
+    pub(super) fn sha256(bytes: &[u8]) -> impl AsRef<[u8]> {
+        digest::digest(&digest::SHA256, bytes)
+    }
+
+    pub(super) fn hmac_sha256(key: &[u8], data: &[u8]) -> impl AsRef<[u8]> {
+        hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, key), data)
+    }
+}
+
+/// SHA-256 and HMAC-SHA256 from RustCrypto, the default.
+#[cfg(not(any(feature = "aws-lc-rs", feature = "aws-lc-rs-fips")))]
+mod hash {
+    use hmac::{digest::FixedOutput, Hmac, KeyInit, Mac};
+    use sha2::{Digest, Sha256};
+
+    pub(super) fn sha256(bytes: &[u8]) -> impl AsRef<[u8]> {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hasher.finalize_fixed()
+    }
+
+    pub(super) fn hmac_sha256(key: &[u8], data: &[u8]) -> impl AsRef<[u8]> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC can take key of any size");
+        mac.update(data);
+        mac.finalize_fixed()
+    }
+}
 
 /// HashedPayload = Lowercase(HexEncode(Hash(requestPayload)))
 #[allow(dead_code)] // Unused when compiling without certain features
 pub(crate) fn sha256_hex_string(bytes: impl AsRef<[u8]>) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize_fixed())
+    hex::encode(hash::sha256(bytes.as_ref()))
 }
 
 /// Calculates a Sigv4 signature
 pub fn calculate_signature(signing_key: impl AsRef<[u8]>, string_to_sign: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(signing_key.as_ref())
-        .expect("HMAC can take key of any size");
-    mac.update(string_to_sign);
-    hex::encode(mac.finalize_fixed())
+    hex::encode(hash::hmac_sha256(signing_key.as_ref(), string_to_sign))
 }
 
 /// Generates a signing key for Sigv4
@@ -45,25 +71,16 @@ pub fn generate_signing_key(
     // kSigning = HMAC(kService, "aws4_request")
 
     let secret = format!("AWS4{secret}");
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_ref()).expect("HMAC can take key of any size");
-    mac.update(format_date(time).as_bytes());
-    let tag = mac.finalize_fixed();
+    let tag = hash::hmac_sha256(secret.as_bytes(), format_date(time).as_bytes());
 
     // sign region
-    let mut mac = Hmac::<Sha256>::new_from_slice(&tag).expect("HMAC can take key of any size");
-    mac.update(region.as_bytes());
-    let tag = mac.finalize_fixed();
+    let tag = hash::hmac_sha256(tag.as_ref(), region.as_bytes());
 
     // sign service
-    let mut mac = Hmac::<Sha256>::new_from_slice(&tag).expect("HMAC can take key of any size");
-    mac.update(service.as_bytes());
-    let tag = mac.finalize_fixed();
+    let tag = hash::hmac_sha256(tag.as_ref(), service.as_bytes());
 
     // sign request
-    let mut mac = Hmac::<Sha256>::new_from_slice(&tag).expect("HMAC can take key of any size");
-    mac.update("aws4_request".as_bytes());
-    mac.finalize_fixed()
+    hash::hmac_sha256(tag.as_ref(), "aws4_request".as_bytes())
 }
 
 /// Parameters to use when signing.
