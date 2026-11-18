@@ -20,9 +20,10 @@ sign-http = ["dep:percent-encoding", "dep:form_urlencoded"]
 sign-eventstream = ["dep:aws-smithy-eventstream"]
 sigv4a = ["dep:p256", "dep:crypto-bigint", "dep:subtle", "dep:zeroize"]
 # Compute SigV4 SHA-256 and HMAC-SHA256 with AWS-LC instead of RustCrypto.
-aws-lc-rs = ["dep:aws-lc-rs", "aws-lc-rs/aws-lc-sys"]
+aws-lc-rs = ["dep:aws-lc-rs", "aws-lc-rs?/aws-lc-sys"]
 # As `aws-lc-rs`, using the AWS-LC FIPS module. SigV4a still uses RustCrypto.
-aws-lc-rs-fips = ["dep:aws-lc-rs", "aws-lc-rs/fips"]
+# `?/` keeps this from also enabling the `aws-lc-rs` feature and its non-FIPS build.
+aws-lc-rs-fips = ["dep:aws-lc-rs", "aws-lc-rs?/fips"]
 
 [dependencies]
 # fslabs: registry versions from the published aws-sigv4 1.6.0, so that patching
